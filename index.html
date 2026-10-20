@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>IR-Camera Vision (iOS Edition)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Inter & JetBrains Mono untuk HUD -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #050505;
+            color: #f3f4f6;
+            overscroll-behavior: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .font-mono-hud {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        /* Custom Range Slider untuk iOS */
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #27272a;
+            border-radius: 999px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            height: 20px;
+            width: 20px;
+            border-radius: 50%;
+            background: #10b981;
+            cursor: pointer;
+            -webkit-appearance: none;
+            margin-top: -7px;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+        }
+        /* Animasi kedip indikator REC */
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.15; }
+        }
+        .animate-rec {
+            animation: blink 1.2s infinite;
+        }
+        /* Hide scrollbar untuk daftar mode di layar sempit */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="h-[100dvh] w-screen overflow-hidden flex flex-col justify-between bg-black select-none">
+
+    <!-- Elemen Video Tersembunyi (PENTING untuk iOS Safari: playsinline + muted) -->
+    <video id="webcamVideo" playsinline autoplay muted class="hidden"></video>
+
+    <!-- ================= TOP BAR (TACTICAL HEADER) ================= -->
+    <header class="z-20 px-4 pt-3 pb-2 bg-gradient-to-b from-black/90 via-black/60 to-transparent flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+            <div class="w-3 h-3 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981] animate-rec"></div>
+            <div>
+                <h1 class="text-sm font-bold tracking-wider uppercase text-white flex items-center gap-1.5">
+                    IR-Vision <span class="text-[10px] font-mono-hud bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-1.5 py-0.5 rounded">iOS PRO</span>
+                </h1>
+                <p id="activeModeSubtitle" class="text-[11px] text-zinc-400 font-mono-hud">SPEKTRUM: NIGHTSHOT 1998</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <!-- Tombol Torch / Senter (Bila didukung kamera belakang) -->
+            <button id="btnTorch" onclick="toggleTorch()" class="p-2.5 rounded-full bg-zinc-900/80 border border-zinc-700/80 text-zinc-300 active:scale-95 transition hidden" title="Nyalakan Flash">
+                <i class="ph ph-flashlight text-lg"></i>
+            </button>
+            <!-- Tombol Panduan iPhone & GitHub -->
+            <button onclick="toggleModal('infoModal', true)" class="px-3 py-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-medium flex items-center gap-1.5 active:scale-95 transition">
+                <i class="ph ph-device-mobile-camera text-base"></i>
+                <span>Panduan iPhone</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- ================= VIEWPORT UTAMA (CANVAS KAMERA) ================= -->
+    <main class="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden bg-zinc-950">
+        <!-- Canvas Pemrosesan Real-Time -->
+        <canvas id="irCanvas" class="w-full h-full object-cover"></canvas>
+
+        <!-- Crosshair / Grid Optik Taktis -->
+        <div id="hudOverlay" class="pointer-events-none absolute inset-0 flex flex-col justify-between p-4 font-mono-hud">
+            <!-- Sudut Bingkai -->
+            <div class="relative w-full h-full border border-white/10 rounded-lg overflow-hidden">
+                <!-- Sudut Hijau Taktis -->
+                <div class="absolute top-2 left-2 w-5 h-5 border-t-2 border-l-2 border-emerald-400/70"></div>
+                <div class="absolute top-2 right-2 w-5 h-5 border-t-2 border-r-2 border-emerald-400/70"></div>
+                <div class="absolute bottom-2 left-2 w-5 h-5 border-b-2 border-l-2 border-emerald-400/70"></div>
+                <div class="absolute bottom-2 right-2 w-5 h-5 border-b-2 border-r-2 border-emerald-400/70"></div>
+
+                <!-- Info HUD Kiri Atas -->
+                <div class="absolute top-4 left-4 text-[11px] leading-tight text-emerald-400 drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+                    <div class="flex items-center gap-1.5 font-bold">
+                        <span id="hudStatusText">NIGHTSHOT: ON</span>
+                    </div>
+                    <div id="hudWavelength" class="text-emerald-300/80">λ: 750nm - 940nm (NIR)</div>
+                    <div id="hudFps" class="text-zinc-400">FPS: -- | GAIN: 1.8x</div>
+                </div>
+
+                <!-- Info HUD Kanan Atas (Baterai & REC) -->
+                <div class="absolute top-4 right-4 text-right text-[11px] text-emerald-400 drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+                    <div class="flex items-center justify-end gap-1.5 font-bold text-red-400">
+                        <span class="w-2 h-2 rounded-full bg-red-500 animate-rec"></span>
+                        <span>STBY / LIVE</span>
+                    </div>
+                    <div id="hudTimestamp" class="text-zinc-300 mt-0.5">00:00:00</div>
+                </div>
+
+                <!-- Crosshair Tengah -->
+                <div class="absolute inset-0 flex items-center justify-center opacity-35">
+                    <div class="w-12 h-12 rounded-full border border-emerald-400 flex items-center justify-center">
+                        <div class="w-1 h-1 bg-emerald-400 rounded-full"></div>
+                    </div>
+                    <div class="absolute w-20 h-[1px] bg-emerald-400/50"></div>
+                    <div class="absolute h-20 w-[1px] bg-emerald-400/50"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Overlay State Saat Kamera Belum Aktif / Izin Ditolak -->
+        <div id="cameraPrompt" class="absolute inset-0 z-10 bg-zinc-950/95 flex flex-col items-center justify-center p-6 text-center">
+            <div class="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-4 shadow-[0_0_25px_rgba(16,185,129,0.2)]">
+                <i class="ph ph-aperture text-4xl"></i>
+            </div>
+            <h2 class="text-lg font-bold text-white mb-1">Aktifkan Sensor Kamera iOS</h2>
+            <p class="text-xs text-zinc-400 max-w-xs mb-6 leading-relaxed">
+                Aplikasi ini memproses spektrum warna merah & inframerah dekat secara langsung di dalam browser iPhone Anda.
+            </p>
+            <button onclick="startCamera()" class="px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm shadow-[0_0_20px_rgba(16,185,129,0.4)] active:scale-95 transition flex items-center gap-2">
+                <i class="ph-bold ph-camera text-lg"></i>
+                <span>Mulai Kamera IR</span>
+            </button>
+            <p id="errorMsg" class="text-xs text-red-400 mt-4 hidden max-w-xs"></p>
+        </div>
+
+        <!-- Efek Kilat Saat Jepret Foto -->
+        <div id="shutterFlash" class="pointer-events-none absolute inset-0 bg-white opacity-0 transition-opacity duration-150"></div>
+    </main>
+
+    <!-- ================= BOTTOM CONTROLS (KONTROL KAMERA iOS) ================= -->
+    <footer class="z-20 bg-zinc-950/95 border-t border-zinc-800/80 px-4 pt-3 pb-6 space-y-3 backdrop-blur-md">
+        
+        <!-- Panel Slider Penguat Sinyal (Gain & Kontras IR) -->
+        <div class="bg-zinc-900/90 border border-zinc-800 rounded-xl p-2.5 flex flex-col gap-2">
+            <div class="flex items-center justify-between text-[11px] font-mono-hud">
+                <span class="text-zinc-400 flex items-center gap-1">
+                    <i class="ph ph-sliders-horizontal text-emerald-400"></i> PENGUAT SINYAL IR (GAIN)
+                </span>
+                <span id="gainValueLabel" class="text-emerald-400 font-bold">1.8x</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <input id="gainSlider" type="range" min="0.8" max="4.0" step="0.1" value="1.8" class="w-full" oninput="updateSliders()">
+                <button onclick="resetSliders()" class="text-[10px] font-mono-hud px-2 py-1 rounded bg-zinc-800 text-zinc-300 active:bg-zinc-700">
+                    Reset
+                </button>
+            </div>
+        </div>
+
+        <!-- Pemilih 4 Mode Filter (Horizontal Scrollable Pills) -->
+        <div class="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+            <button onclick="setMode(1)" id="modeBtn1" class="mode-btn shrink-0 px-3.5 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-zinc-900 border-zinc-800 text-zinc-400">
+                <i class="ph-fill ph-eye"></i>
+                <span>1. Normal (IR-Cut)</span>
+            </button>
+            <button onclick="setMode(2)" id="modeBtn2" class="mode-btn shrink-0 px-3.5 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.25)]">
+                <i class="ph-fill ph-video-camera"></i>
+                <span>2. Sony NightShot '98</span>
+            </button>
+            <button onclick="setMode(3)" id="modeBtn3" class="mode-btn shrink-0 px-3.5 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-zinc-900 border-zinc-800 text-zinc-400">
+                <i class="ph-fill ph-aperture"></i>
+                <span>3. Photochrom (OnePlus)</span>
+            </button>
+            <button onclick="setMode(4)" id="modeBtn4" class="mode-btn shrink-0 px-3.5 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-zinc-900 border-zinc-800 text-zinc-400">
+                <i class="ph-fill ph-disc"></i>
+                <span>4. Pure IR (Filter Fisik)</span>
+            </button>
+        </div>
+
+        <!-- Baris Tombol Utama: Galeri, Jepret, Putar Kamera -->
+        <div class="flex items-center justify-around pt-1">
+            <!-- Pratinjau Foto Terakhir -->
+            <button onclick="openPreviewModal()" id="lastPhotoBtn" class="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-700 overflow-hidden flex items-center justify-center text-zinc-500 active:scale-95 transition relative">
+                <i id="galleryIcon" class="ph ph-image text-xl"></i>
+                <img id="lastPhotoThumb" src="" alt="Hasil Foto" class="w-full h-full object-cover hidden">
+            </button>
+
+            <!-- Tombol Shutter (Jepret Foto) -->
+            <button onclick="capturePhoto()" class="w-16 h-16 rounded-full p-1 border-2 border-emerald-400 flex items-center justify-center active:scale-90 transition shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+                <div class="w-full h-full rounded-full bg-emerald-500 active:bg-emerald-400 flex items-center justify-center text-black">
+                    <i class="ph-bold ph-camera text-2xl"></i>
+                </div>
+            </button>
+
+            <!-- Tombol Ganti Kamera Depan / Belakang -->
+            <button onclick="switchCamera()" class="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-700 flex flex-col items-center justify-center text-zinc-200 active:scale-95 transition">
+                <i class="ph ph-camera-rotate text-xl"></i>
+                <span id="camFacingLabel" class="text-[9px] font-mono-hud text-zinc-400 mt-0.5">BELAKANG</span>
+            </button>
+        </div>
+    </footer>
+
+    <!-- ================= MODAL PANDUAN iPHONE & EKSPERIMEN IR ================= -->
+    <div id="infoModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden items-center justify-center p-4">
+        <div class="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-md w-full max-h-[85dvh] flex flex-col overflow-hidden shadow-2xl">
+            <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-950">
+                <h3 class="text-sm font-bold text-emerald-400 flex items-center gap-2">
+                    <i class="ph-fill ph-info text-lg"></i> Cara Pakai di iPhone (iOS)
+                </h3>
+                <button onclick="toggleModal('infoModal', false)" class="p-1 text-zinc-400 hover:text-white">
+                    <i class="ph ph-x text-lg"></i>
+                </button>
+            </div>
+
+            <div class="p-4 overflow-y-auto space-y-4 text-xs text-zinc-300 leading-relaxed">
+                <!-- Bagian 1: Cara Buka di iPhone -->
+                <div class="bg-zinc-950 border border-zinc-800 rounded-xl p-3">
+                    <h4 class="font-bold text-white mb-1 flex items-center gap-1.5">
+                        <i class="ph-fill ph-globe text-emerald-400"></i> 1. Cara Menjalankan di Safari iPhone
+                    </h4>
+                    <p class="text-zinc-400">
+                        iOS mewajibkan koneksi aman (<strong>HTTPS</strong>) untuk membuka akses kamera. Cara termudah:
+                    </p>
+                    <ol class="list-decimal list-inside mt-1.5 space-y-1 text-zinc-300">
+                        <li>Simpan kode ini sebagai <code class="text-emerald-400">index.html</code> dan unggah ke repositori <strong>GitHub</strong> Anda.</li>
+                        <li>Aktifkan fitur <strong>GitHub Pages</strong> di menu <em>Settings &gt; Pages</em>.</li>
+                        <li>Buka link <code class="text-emerald-400">https://username.github.io/nama-repo</code> di Safari iPhone, lalu pilih <strong>"Bagikan &gt; Tambah ke Layar Utama"</strong> agar menjadi aplikasi penuh.</li>
+                    </ol>
+                </div>
+
+                <!-- Bagian 2: Rahasia Kamera Depan iPhone -->
+                <div class="bg-emerald-950/30 border border-emerald-500/30 rounded-xl p-3">
+                    <h4 class="font-bold text-emerald-300 mb-1 flex items-center gap-1.5">
+                        <i class="ph-fill ph-sparkle text-emerald-400"></i> 2. Trik Kamera Depan + Filter Film (Mode 4)
+                    </h4>
+                    <p class="text-zinc-300">
+                        Kamera belakang iPhone memiliki lapisan <em>IR-Cut Filter</em> yang sangat tebal. Namun, <strong>Kamera Depan (Selfie)</strong> biasanya masih menyisakan sedikit sensitivitas terhadap cahaya Inframerah Dekat (NIR):
+                    </p>
+                    <ul class="list-disc list-inside mt-1.5 space-y-1 text-zinc-300">
+                        <li>Ganti ke <strong>Kamera Depan</strong> dan pilih <strong>Mode 4 (Pure IR)</strong>.</li>
+                        <li>Tempelkan kepingan film hitam dari dalam disket bekas atau ujung negatif film kamera di depan lensa depan.</li>
+                        <li>Coba tekan tombol <strong>Remote TV</strong> ke arah kamera depan atau gunakan di bawah sinar matahari terik, lalu naikkan slider <strong>GAIN</strong> hingga 3.5x. Anda akan melihat cahaya inframerah menyala putih!</li>
+                    </ul>
+                </div>
+
+                <!-- Bagian 3: Penjelasan 4 Mode -->
+                <div class="bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-2">
+                    <h4 class="font-bold text-white flex items-center gap-1.5">
+                        <i class="ph-fill ph-sliders text-emerald-400"></i> 3. Penjelasan Mode Spektrum
+                    </h4>
+                    <div>
+                        <span class="text-emerald-400 font-semibold">• Mode 2 (Sony NightShot 1998):</span> Mengisolasi gelombang merah (700nm+) yang paling dekat dengan inframerah, memperkuat kontras lokal, dan memberi lapisan fosfor hijau.
+                    </div>
+                    <div>
+                        <span class="text-amber-400 font-semibold">• Mode 3 (Photochrom 2020):</span> Membalikkan kanal biru dan menggabungkannya dengan kanal merah ber-gain tinggi, meniru efek sensor warna <em>Photochrom</em> OnePlus 8 Pro.
+                    </div>
+                    <div>
+                        <span class="text-zinc-200 font-semibold">• Mode 4 (Pure IR Enhancer):</span> Mengubah tangkapan redup menjadi monokrom kontras ekstrem khusus saat lensa Anda dipasangi filter IR fisik.
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-3 border-t border-zinc-800 bg-zinc-950">
+                <button onclick="toggleModal('infoModal', false)" class="w-full py-2.5 rounded-xl bg-emerald-500 text-black font-bold text-xs">
+                    Mengerti & Tutup
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= MODAL PRATINJAU & SIMPAN FOTO iOS ================= -->
+    <div id="previewModal" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-md hidden items-center justify-center p-4">
+        <div class="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-sm w-full overflow-hidden flex flex-col">
+            <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+                <span class="text-xs font-bold text-white">Hasil Tangkapan Spektrum IR</span>
+                <button onclick="toggleModal('previewModal', false)" class="text-zinc-400 hover:text-white">
+                    <i class="ph ph-x text-lg"></i>
+                </button>
+            </div>
+            <div class="p-3 bg-black flex items-center justify-center">
+                <img id="previewModalImg" src="" alt="Preview IR" class="max-h-[55dvh] w-auto rounded-lg border border-zinc-800">
+            </div>
+            <div class="p-3 bg-zinc-950 text-center space-y-2">
+                <p class="text-[11px] text-zinc-400">
+                    💡 <strong>Tips iPhone:</strong> Tekan dan tahan gambar di atas lalu pilih <em>"Simpan ke Foto"</em>, atau ketuk tombol Unduh di bawah.
+                </p>
+                <div class="flex gap-2">
+                    <a id="downloadLink" href="#" download="ir-vision-capture.jpg" class="flex-1 py-2.5 rounded-xl bg-emerald-500 text-black font-bold text-xs flex items-center justify-center gap-1.5">
+                        <i class="ph-bold ph-download-simple"></i> Unduh Gambar
+                    </a>
+                    <button onclick="toggleModal('previewModal', false)" class="px-4 py-2.5 rounded-xl bg-zinc-800 text-zinc-300 font-semibold text-xs">
+                        Tutup
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= SCRIPT PEMROSESAN CITRA REAL-TIME ================= -->
+    <script>
+        const video = document.getElementById('webcamVideo');
+        const canvas = document.getElementById('irCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        let currentStream = null;
+        let facingMode = 'environment'; // Default kamera belakang
+        let currentMode = 2; // Default Mode 2: Sony NightShot
+        let gainFactor = 1.8;
+        let isRunning = false;
+        let torchEnabled = false;
+        let lastCapturedDataUrl = null;
+
+        // Variabel penghitung FPS
+        let frameCount = 0;
+        let lastFpsTime = performance.now();
+        let currentFps = 30;
+
+        // Lookup Table (LUT) untuk percepatan komputasi piksel di iPhone
+        let gainLUT = new Uint8ClampedArray(256);
+
+        function rebuildLUT() {
+            for (let i = 0; i < 256; i++) {
+                // Kurva non-linear (Gamma + Gain) agar sinyal IR redup langsung terangkat
+                let normalized = i / 255.0;
+                let boosted = Math.pow(normalized, 1 / (gainFactor * 0.65)) * 255 * (gainFactor * 0.75);
+                gainLUT[i] = Math.min(255, Math.max(0, boosted));
+            }
+        }
+        rebuildLUT();
+
+        // Update jam HUD setiap detik
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('hudTimestamp').textContent = now.toTimeString().split(' ')[0];
+        }, 1000);
+
+        // Fungsi memulai kamera (Kompatibel penuh dengan iOS Safari)
+        async function startCamera() {
+            const errorEl = document.getElementById('errorMsg');
+            errorEl.classList.add('hidden');
+
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            const constraints = {
+                audio: false,
+                video: {
+                    facingMode: { ideal: facingMode },
+                    width: { ideal: 640 },
+                    height: { ideal: 480 }
+                }
+            };
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+                video.setAttribute('playsinline', true); // Wajib untuk iOS Safari
+                await video.play();
+
+                document.getElementById('cameraPrompt').classList.add('hidden');
+                checkTorchSupport();
+
+                if (!isRunning) {
+                    isRunning = true;
+                    requestAnimationFrame(processFrame);
+                }
+            } catch (err) {
+                errorEl.textContent = "Gagal mengakses kamera: Pastikan Anda membuka lewat HTTPS/GitHub Pages dan mengizinkan akses kamera di Safari.";
+                errorEl.classList.remove('hidden');
+            }
+        }
+
+        // Cek apakah kamera belakang mendukung senter/torch
+        function checkTorchSupport() {
+            const btnTorch = document.getElementById('btnTorch');
+            if (!currentStream) return;
+            const track = currentStream.getVideoTracks()[0];
+            const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+            if (capabilities.torch) {
+                btnTorch.classList.remove('hidden');
+            } else {
+                btnTorch.classList.add('hidden');
+                torchEnabled = false;
+            }
+        }
+
+        async function toggleTorch() {
+            if (!currentStream) return;
+            const track = currentStream.getVideoTracks()[0];
+            try {
+                torchEnabled = !torchEnabled;
+                await track.applyConstraints({ advanced: [{ torch: torchEnabled }] });
+                const btnTorch = document.getElementById('btnTorch');
+                if (torchEnabled) {
+                    btnTorch.classList.add('bg-amber-500/20', 'border-amber-400', 'text-amber-300');
+                } else {
+                    btnTorch.classList.remove('bg-amber-500/20', 'border-amber-400', 'text-amber-300');
+                }
+            } catch (e) {
+                torchEnabled = false;
+            }
+        }
+
+        // Ganti Kamera Depan / Belakang
+        function switchCamera() {
+            facingMode = (facingMode === 'environment') ? 'user' : 'environment';
+            document.getElementById('camFacingLabel').textContent = (facingMode === 'environment') ? 'BELAKANG' : 'DEPAN';
+            startCamera();
+        }
+
+        // Pengaturan Slider Gain
+        function updateSliders() {
+            const slider = document.getElementById('gainSlider');
+            gainFactor = parseFloat(slider.value);
+            document.getElementById('gainValueLabel').textContent = gainFactor.toFixed(1) + 'x';
+            document.getElementById('hudFps').textContent = `FPS: ${currentFps} | GAIN: ${gainFactor.toFixed(1)}x`;
+            rebuildLUT();
+        }
+
+        function resetSliders() {
+            document.getElementById('gainSlider').value = 1.8;
+            updateSliders();
+        }
+
+        // Ganti Mode Spektrum (1 - 4)
+        function setMode(mode) {
+            currentMode = mode;
+            const subtitles = {
+                1: "SPEKTRUM: RGB NORMAL (IR-CUT ON)",
+                2: "SPEKTRUM: SONY NIGHTSHOT 1998",
+                3: "SPEKTRUM: PHOTOCHROM (ONEPLUS 8 PRO)",
+                4: "SPEKTRUM: PURE IR ENHANCER (NO-IR)"
+            };
+            const hudStatus = {
+                1: "IR-CUT FILTER: ACTIVE",
+                2: "NIGHTSHOT: ON (GREEN IR)",
+                3: "PHOTOCHROM: FALSE-COLOR IR",
+                4: "RAW NIR BOOST: HIGH GAIN"
+            };
+
+            document.getElementById('activeModeSubtitle').textContent = subtitles[mode];
+            document.getElementById('hudStatusText').textContent = hudStatus[mode];
+
+            // Update tampilan tombol aktif
+            for (let i = 1; i <= 4; i++) {
+                const btn = document.getElementById('modeBtn' + i);
+                if (i === mode) {
+                    btn.className = "mode-btn shrink-0 px-3.5 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.25)]";
+                } else {
+                    btn.className = "mode-btn shrink-0 px-3.5 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-zinc-900 border-zinc-800 text-zinc-400";
+                }
+            }
+        }
+
+        // Loop Utama Pemrosesan Piksel Kamera
+        function processFrame(now) {
+            if (!isRunning) return;
+
+            // Hitung FPS
+            frameCount++;
+            if (now - lastFpsTime >= 1000) {
+                currentFps = frameCount;
+                frameCount = 0;
+                lastFpsTime = now;
+                document.getElementById('hudFps').textContent = `FPS: ${currentFps} | GAIN: ${gainFactor.toFixed(1)}x`;
+            }
+
+            if (video.readyState >= video.HAVE_CURRENT_DATA) {
+                const vw = video.videoWidth || 640;
+                const vh = video.videoHeight || 480;
+
+                if (canvas.width !== vw || canvas.height !== vh) {
+                    canvas.width = vw;
+                    canvas.height = vh;
+                }
+
+                // Gambar frame video (Mirror otomatis jika memakai kamera depan)
+                ctx.save();
+                if (facingMode === 'user') {
+                    ctx.translate(vw, 0);
+                    ctx.scale(-1, 1);
+                }
+                ctx.drawImage(video, 0, 0, vw, vh);
+                ctx.restore();
+
+                // Jika bukan Mode 1 (Normal), lakukan manipulasi piksel spektrum IR
+                if (currentMode !== 1) {
+                    const frameData = ctx.getImageData(0, 0, vw, vh);
+                    const data = frameData.data;
+                    const len = data.length;
+
+                    if (currentMode === 2) {
+                        // MODE 2: SONY NIGHTSHOT 1998
+                        // Isolasi Kanal Merah (paling dekat dengan Near-IR), kuatkan dengan LUT, beri fosfor hijau + scanline
+                        for (let i = 0; i < len; i += 4) {
+                            const r = data[i];
+                            const g = data[i + 1];
+                            // Prioritaskan gelombang merah (85% Merah + 15% Hijau)
+                            const irSignal = gainLUT[(r * 0.85 + g * 0.15) | 0];
+
+                            // Scanline halus setiap baris genap
+                            const pixelIndex = i >> 2;
+                            const row = (pixelIndex / vw) | 0;
+                            const scanline = (row & 1) ? 0.92 : 1.0;
+
+                            data[i]     = (irSignal * 0.18 * scanline) | 0; // Red rendah
+                            data[i + 1] = (irSignal * scanline) | 0;        // Green fosfor utama
+                            data[i + 2] = (irSignal * 0.22 * scanline) | 0; // Blue sedikit untuk efek CRT
+                        }
+                    } else if (currentMode === 3) {
+                        // MODE 3: PHOTOCHROM 2020 (OnePlus 8 Pro Style)
+                        // Inversi parsial kanal biru/hijau + penguatan kanal merah untuk efek Amber/Sepia Tembus Pandang
+                        for (let i = 0; i < len; i += 4) {
+                            const rBoost = gainLUT[data[i]];
+                            const gOrig = data[i + 1];
+                            const bInvert = 255 - data[i + 2];
+
+                            // Kombinasi False-Color khas sensor Photochrom
+                            data[i]     = Math.min(255, (rBoost * 0.9 + bInvert * 0.25) | 0); // Merah/Amber kuat
+                            data[i + 1] = Math.min(255, (rBoost * 0.52 + (255 - gOrig) * 0.25) | 0); // Sepia/Emas
+                            data[i + 2] = Math.min(255, (bInvert * 0.55 + rBoost * 0.25) | 0); // Ungu/Violet bayangan
+                        }
+                    } else if (currentMode === 4) {
+                        // MODE 4: PURE IR ENHANCER (Untuk Penggunaan dengan Filter Film/Disket di Lensa)
+                        // Mengangkat sinyal merah/inframerah redup menjadi hitam-putih kontras ekstrem
+                        for (let i = 0; i < len; i += 4) {
+                            // Ambil nilai maksimum antara kanal merah dan biru (lampu IR 850nm/940nm sering tertangkap sebagai ungu/merah di sensor CMOS)
+                            const rawIr = Math.max(data[i], (data[i] * 0.7 + data[i + 2] * 0.5) | 0);
+                            let val = gainLUT[Math.min(255, rawIr)];
+
+                            // Dorong kontras agar siluet makin tegas
+                            val = val > 18 ? Math.min(255, ((val - 18) * 1.25) | 0) : 0;
+
+                            data[i]     = val;
+                            data[i + 1] = val;
+                            data[i + 2] = val;
+                        }
+                    }
+
+                    ctx.putImageData(frameData, 0, 0);
+                }
+            }
+
+            requestAnimationFrame(processFrame);
+        }
+
+        // Fungsi Jepret Foto & Simpan dengan Watermark HUD
+        function capturePhoto() {
+            if (!isRunning) return;
+
+            // Efek kilat layar
+            const flash = document.getElementById('shutterFlash');
+            flash.style.opacity = '0.85';
+            setTimeout(() => { flash.style.opacity = '0'; }, 150);
+
+            // Buat canvas sementara agar hasil foto menyertakan teks stempel mode IR
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            const tCtx = tempCanvas.getContext('2d');
+
+            tCtx.drawImage(canvas, 0, 0);
+
+            // Tambahkan informasi stempel kamera di pojok bawah foto
+            tCtx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+            tCtx.fillRect(12, tempCanvas.height - 44, 310, 32);
+            tCtx.font = 'bold 13px monospace';
+            tCtx.fillStyle = '#10b981';
+            const modeText = document.getElementById('activeModeSubtitle').textContent;
+            tCtx.fillText(`${modeText} | GAIN ${gainFactor.toFixed(1)}x`, 20, tempCanvas.height - 23);
+
+            lastCapturedDataUrl = tempCanvas.toDataURL('image/jpeg', 0.92);
+
+            // Tampilkan di thumbnail bawah
+            const thumb = document.getElementById('lastPhotoThumb');
+            const icon = document.getElementById('galleryIcon');
+            thumb.src = lastCapturedDataUrl;
+            thumb.classList.remove('hidden');
+            icon.classList.add('hidden');
+
+            // Siapkan di modal preview
+            document.getElementById('previewModalImg').src = lastCapturedDataUrl;
+            document.getElementById('downloadLink').href = lastCapturedDataUrl;
+            document.getElementById('downloadLink').download = `IR-Vision-Mode${currentMode}-${Date.now()}.jpg`;
+        }
+
+        function openPreviewModal() {
+            if (!lastCapturedDataUrl) return;
+            toggleModal('previewModal', true);
+        }
+
+        function toggleModal(modalId, show) {
+            const modal = document.getElementById(modalId);
+            if (show) {
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+            } else {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }
+        }
+
+        // Otomatis coba nyalakan kamera saat halaman dimuat
+        window.addEventListener('load', () => {
+            startCamera();
+        });
+    </script>
+</body>
+</html>
